@@ -24,4 +24,4 @@ jobs:
             docker build -t bot:latest .
       - name: Push docker image
         run: |
-            docker push bot:latest ghcr.io/${REPO}:latest
+            docker push bot:latest ghcr.io/spitzli/${REPO}:latest
