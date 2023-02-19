@@ -1,14 +1,21 @@
+use futures_util::StreamExt;
+use sparkle_convenience::Bot;
 use std::{env, sync::Arc};
 use twilight_cache_inmemory::InMemoryCache;
-use twilight_gateway::{Intents, Shard, ShardId};
+use twilight_gateway::{stream::ShardEventStream, EventTypeFlags, Intents};
 use twilight_http::Client;
 
+mod command;
+mod event;
 mod handler;
+mod utils;
 
+#[derive(Debug)]
 pub struct Context {
     pub client: Arc<Client>,
     pub cache: Arc<InMemoryCache>,
-    //shard: Arc<Shard>,
+    pub bot: Bot,
+    //pub shards: Vec<Shard>,
 }
 
 #[tokio::main]
@@ -21,18 +28,18 @@ async fn main() -> anyhow::Result<()> {
     let token = env::var("DISCORD_TOKEN").expect("Expected a Discord Token in the environment");
 
     let intents = Intents::GUILD_MESSAGES | Intents::GUILD_VOICE_STATES;
+    let event_types =
+        EventTypeFlags::READY | EventTypeFlags::INTERACTION_CREATE | EventTypeFlags::MESSAGE_CREATE;
     let client = Arc::new(Client::new(token.clone()));
     let cache = Arc::new(InMemoryCache::new());
-    let mut shard = Shard::new(ShardId::ONE, token.clone(), intents);
 
-    let context = Arc::new(Context {
-        client,
-        cache,
-        //shard: shard.clone(),
-    });
+    let (bot, mut shards) = Bot::new(token.clone(), intents, event_types).await?;
 
-    loop {
-        let event = match shard.next_event().await {
+    let context = Arc::new(Context { client, cache, bot });
+    let mut stream = ShardEventStream::new(shards.iter_mut());
+
+    while let Some((shard, event)) = stream.next().await {
+        let event = match event {
             Ok(event) => event,
             Err(source) => {
                 tracing::warn!(?source, "error receiving event");
@@ -44,8 +51,13 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
         };
+        context.cache.update(&event);
 
-        tokio::spawn(handler::handle_event(event, context.clone()));
+        tokio::spawn(handler::handle_event(
+            event,
+            context.clone(),
+            shard.latency().clone(),
+        ));
     }
 
     Ok(())
